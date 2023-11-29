@@ -19,9 +19,12 @@ ENV GEOSERVER_CORS_ALLOWED_HEADERS=$GEOSERVER_CORS_ALLOWED_HEADERS
 #
 # Download and install GeoServer
 #
-RUN apt-get update -y && apt-get install curl wget unzip -y
+
+# FIXME: it should not be necessary to install openjdk-11-jre
+RUN apt-get update -y && apt-get install curl wget unzip openjdk-11-jdk postgresql-client-13 -y
+COPY geoserver.war /usr/local/tomcat/webapps
 RUN cd /usr/local/tomcat/webapps \
-    && wget --no-check-certificate --progress=bar:force:noscroll https://artifacts.geonode.org/geoserver/${GEOSERVER_VERSION}/geoserver.war -O geoserver.war \
+    # && wget --no-check-certificate --progress=bar:force:noscroll https://artifacts.geonode.org/geoserver/${GEOSERVER_VERSION}/geoserver.war -O geoserver.war \
     && unzip -q geoserver.war -d geoserver \
     && rm geoserver.war \
     && mkdir -p $GEOSERVER_DATA_DIR
@@ -44,6 +47,7 @@ RUN mkdir -p /usr/local/tomcat/tmp
 WORKDIR /usr/local/tomcat/tmp
 COPY set_geoserver_auth.sh /usr/local/tomcat/tmp
 COPY entrypoint.sh /usr/local/tomcat/tmp
+COPY bootstrap-once.sh /usr/local/tomcat/tmp
 COPY tasks.py /usr/local/tomcat/tmp
 COPY ./templates /templates
 COPY multidump.sh /usr/local/tomcat/tmp
@@ -59,5 +63,9 @@ RUN apt-get update \
 RUN pip install j2cli invoke==2.2.0 requests==2.31.0
 
 ENV JAVA_OPTS="-Djava.awt.headless=true -Dgwc.context.suffix=gwc -XX:+UnlockDiagnosticVMOptions -XX:+LogVMOutput -XX:LogFile=/var/log/jvm.log -XX:MaxPermSize=512m -XX:PermSize=256m -Xms512m -Xmx2048m -XX:+UseConcMarkSweepGC -XX:ParallelGCThreads=4 -Dfile.encoding=UTF8 -Djavax.servlet.request.encoding=UTF-8 -Djavax.servlet.response.encoding=UTF-8 -Duser.timezone=GMT -Dorg.geotools.shapefile.datetime=false -DGS-SHAPEFILE-CHARSET=UTF-8 -DGEOSERVER_CSRF_DISABLED=true -DPRINT_BASE_URL=http://geoserver:8080/geoserver/pdf -Xbootclasspath/a:/usr/local/tomcat/webapps/geoserver/WEB-INF/lib/marlin-0.9.3.jar -Dsun.java2d.renderer=org.marlin.pisces.MarlinRenderingEngine"
+
+#ENV CLUSTER_CONFIG_DIR=/geoserver_cluster
+#RUN mkdir -p "$CLUSTER_CONFIG_DIR"
+#COPY ./cluster.properties /geoserver_cluster
 
 CMD ["/usr/local/tomcat/tmp/entrypoint.sh"]

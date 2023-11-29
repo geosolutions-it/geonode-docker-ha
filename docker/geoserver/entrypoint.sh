@@ -3,7 +3,6 @@ set -e
 
 source /root/.bashrc
 
-
 INVOKE_LOG_STDOUT=${INVOKE_LOG_STDOUT:-TRUE}
 invoke () {
     if [ $INVOKE_LOG_STDOUT = 'true' ] || [ $INVOKE_LOG_STDOUT = 'True' ]
@@ -128,6 +127,9 @@ then
     export JAVA_OPTS=${GEOSERVER_JAVA_OPTS}
 fi
 
+JAVA_OPTS="$JAVA_OPTS -DGEOSERVER_LOG_LOCATION=$GEOSERVER_LOGS_DIR/$(hostname).log"
+export JAVA_OPTS
+
 # control the value of NGINX_BASE_URL variable
 if [ -z `echo ${NGINX_BASE_URL} | sed 's/http:\/\/\([^:]*\).*/\1/'` ]
 then
@@ -151,98 +153,50 @@ else
     echo export GEONODE_LOCATION=http://${GEONODE_LB_HOST_IP}:${GEONODE_LB_PORT} >> /root/.override_env
 fi
 
-# set basic tagname
-TAGNAME=( "baseUrl" "authApiKey" )
-
-if ! [ -f ${GEOSERVER_DATA_DIR}/security/auth/geonodeAuthProvider/config.xml ]
-then
-    echo "Configuration file '$GEOSERVER_DATA_DIR'/security/auth/geonodeAuthProvider/config.xml is not available so it is gone to skip "
-else
-    # backup geonodeAuthProvider config.xml
-    cp ${GEOSERVER_DATA_DIR}/security/auth/geonodeAuthProvider/config.xml ${GEOSERVER_DATA_DIR}/security/auth/geonodeAuthProvider/config.xml.orig
-    # run the setting script for geonodeAuthProvider
-    /usr/local/tomcat/tmp/set_geoserver_auth.sh ${GEOSERVER_DATA_DIR}/security/auth/geonodeAuthProvider/config.xml ${GEOSERVER_DATA_DIR}/security/auth/geonodeAuthProvider/ ${TAGNAME[@]} > /dev/null 2>&1
-fi
-
-# backup geonode REST role service config.xml
-cp "${GEOSERVER_DATA_DIR}/security/role/geonode REST role service/config.xml" "${GEOSERVER_DATA_DIR}/security/role/geonode REST role service/config.xml.orig"
-# run the setting script for geonode REST role service
-/usr/local/tomcat/tmp/set_geoserver_auth.sh "${GEOSERVER_DATA_DIR}/security/role/geonode REST role service/config.xml" "${GEOSERVER_DATA_DIR}/security/role/geonode REST role service/" ${TAGNAME[@]} > /dev/null 2>&1
-
-# set oauth2 filter tagname
-TAGNAME=( "cliendId" "clientSecret" "accessTokenUri" "userAuthorizationUri" "redirectUri" "checkTokenEndpointUrl" "logoutUri" )
-
-# backup geonode-oauth2 config.xml
-cp ${GEOSERVER_DATA_DIR}/security/filter/geonode-oauth2/config.xml ${GEOSERVER_DATA_DIR}/security/filter/geonode-oauth2/config.xml.orig
-# run the setting script for geonode-oauth2
-/usr/local/tomcat/tmp/set_geoserver_auth.sh ${GEOSERVER_DATA_DIR}/security/filter/geonode-oauth2/config.xml ${GEOSERVER_DATA_DIR}/security/filter/geonode-oauth2/ "${TAGNAME[@]}" > /dev/null 2>&1
-
-# set global tagname
-TAGNAME=( "proxyBaseUrl" )
-
-# backup global.xml
-cp ${GEOSERVER_DATA_DIR}/global.xml ${GEOSERVER_DATA_DIR}/global.xml.orig
-# run the setting script for global configuration
-/usr/local/tomcat/tmp/set_geoserver_auth.sh ${GEOSERVER_DATA_DIR}/global.xml ${GEOSERVER_DATA_DIR}/ ${TAGNAME[@]} > /dev/null 2>&1
-
-# set correct amqp broker url
-sed -i -e 's/localhost/rabbitmq/g' ${GEOSERVER_DATA_DIR}/notifier/notifier.xml
-
-# exclude wrong dependencies
-sed -i -e 's/xom-\*\.jar/xom-\*\.jar,bcprov\*\.jar/g' /usr/local/tomcat/conf/catalina.properties
-
-# J2 templating for this docker image we should also do it for other configuration files in /usr/local/tomcat/tmp
-
-declare -a geoserver_datadir_template_dirs=("geofence")
-
-for template in in ${geoserver_datadir_template_dirs[*]}; do
-    #Geofence templates
-    if [ "$template" == "geofence" ]; then
-      cp -R /templates/$template/* ${GEOSERVER_DATA_DIR}/geofence
-
-      for f in $(find ${GEOSERVER_DATA_DIR}/geofence/ -type f -name "*.j2"); do
-          echo -e "Evaluating template\n\tSource: $f\n\tDest: ${f%.j2}"
-          /usr/local/bin/j2 $f > ${f%.j2}
-          rm -f $f
-      done
-
-    fi
-done
-
-# configure CORS (inspired by https://github.com/oscarfonts/docker-geoserver)
-# if enabled, this will add the filter definitions
-# to the end of the web.xml
-# (this will only happen if our filter has not yet been added before)
-if [ "${GEOSERVER_CORS_ENABLED}" = "true" ] || [ "${GEOSERVER_CORS_ENABLED}" = "True" ]; then
-  if ! grep -q DockerGeoServerCorsFilter "$CATALINA_HOME/webapps/geoserver/WEB-INF/web.xml"; then
-    echo "Enable CORS for $CATALINA_HOME/webapps/geoserver/WEB-INF/web.xml"
-    sed -i "\:</web-app>:i\\
-    <filter>\n\
-      <filter-name>DockerGeoServerCorsFilter</filter-name>\n\
-      <filter-class>org.apache.catalina.filters.CorsFilter</filter-class>\n\
-      <init-param>\n\
-          <param-name>cors.allowed.origins</param-name>\n\
-          <param-value>${GEOSERVER_CORS_ALLOWED_ORIGINS}</param-value>\n\
-      </init-param>\n\
-      <init-param>\n\
-          <param-name>cors.allowed.methods</param-name>\n\
-          <param-value>${GEOSERVER_CORS_ALLOWED_METHODS}</param-value>\n\
-      </init-param>\n\
-      <init-param>\n\
-        <param-name>cors.allowed.headers</param-name>\n\
-        <param-value>${GEOSERVER_CORS_ALLOWED_HEADERS}</param-value>\n\
-      </init-param>\n\
-    </filter>\n\
-    <filter-mapping>\n\
-      <filter-name>DockerGeoServerCorsFilter</filter-name>\n\
-      <url-pattern>/*</url-pattern>\n\
-    </filter-mapping>" "$CATALINA_HOME/webapps/geoserver/WEB-INF/web.xml";
-  fi
+# if we do not want a shared data_dir, use a host-specific path
+if [ "$GEOSERVER_DATA_DIR_SHARED" -eq 0 ]; then
+    GEOSERVER_DATA_DIR="$GEOSERVER_DATA_DIR/$(hostname)"
+    export GEOSERVER_DATA_DIR
 fi
 
 if [ ${FORCE_REINIT} = "true" ]  || [ ${FORCE_REINIT} = "True" ] || [ ! -e "${GEOSERVER_DATA_DIR}/geoserver_init.lock" ]; then
     # Run async configuration, it needs Geoserver to be up and running
     nohup sh -c "invoke configure-geoserver" &
+fi
+
+# separate the cluster config dir
+CLUSTER_CONFIG_DIR="$GEOSERVER_CLUSTER_CONFIG_DIR/$(hostname)"
+export CLUSTER_CONFIG_DIR
+mkdir -p "$CLUSTER_CONFIG_DIR"
+JAVA_OPTS="$JAVA_OPTS -DCLUSTER_CONFIG_DIR=$CLUSTER_CONFIG_DIR"
+export JAVA_OPTS
+
+# Set a new cluster instanceName if not already set
+#sed -i "s/^instanceName=$/instanceName=$(cat /proc/sys/kernel/random/uuid)/" "${CLUSTER_CONFIG_DIR}"/cluster.properties
+
+# FIXME: this workaround (for a deploy in a Swarm) keeps GS from starting (and
+# crashing) before JDBC can to connect to Postgres
+attempts=0
+while ! /usr/bin/pg_isready -h "$DATABASE_HOST"; do
+  attempts=$((attempts + 1))
+  printf "Checking database availability: attempt %s\n" "$attempts"
+  sleep 1
+done
+
+# FIXME: this workaround (for a deploy in a Swarm) keeps GS from starting (and
+# crashing) before ActiveMQ is available
+if [ "$ACTIVEMQ_HOST_CHECK" -eq 1 ]; then
+  attempts=0
+  curl_exit_code=-1
+  while [ "$curl_exit_code" -ne 0 ] && [ "$curl_exit_code" -ne 1 ]; do
+    attempts=$((attempts + 1))
+    printf "Checking ActiveMQ availability: attempt %s\n" "$attempts"
+    set +e
+    curl -sS --max-time 5 "$ACTIVEMQ_HOST":61616
+    curl_exit_code=$?
+    set -e
+    sleep 1
+  done
 fi
 
 # start tomcat
